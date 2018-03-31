@@ -29,7 +29,7 @@ module Database.ODBC.Internal
   , exec
   , query
   , queryMaps
-  , Value(..)
+  , SqlValue(..)
   , Binary(..)
     -- * Streaming results
   , stream
@@ -96,37 +96,38 @@ data ODBCException
 instance Exception ODBCException
 
 -- | A value used for input/output with the database.
-data Value
-  = TextValue !Text
+data SqlValue
+  = SqlText !Text
     -- ^ A Unicode text value.
-  | ByteStringValue !ByteString
+  | SqlByteString !ByteString
     -- ^ A vector of bytes. It might be binary, or a string, but we
     -- don't know the encoding. Use 'Data.Text.Encoding.decodeUtf8' if
     -- the string is UTF-8 encoded, or
     -- 'Data.Text.Encoding.decodeUtf16LE' if it is UTF-16 encoded. For
     -- other encodings, see the Haskell text-icu package.  For raw
     -- binary, see 'BinaryValue'.
-  | BinaryValue !Binary
+  | SqlBinary !Binary
     -- ^ Only a vector of bytes. Intended for binary data, not for
     -- ASCII text.
-  | BoolValue !Bool
+  | SqlBool !Bool
     -- ^ A simple boolean.
-  | DoubleValue !Double
+  | SqlDouble !Double
     -- ^ Floating point values that fit in a 'Double'.
-  | FloatValue !Float
+  | SqlFloat !Float
     -- ^ Floating point values that fit in a 'Float'.
-  | IntValue !Int
+  | SqlInt !Int
     -- ^ Integer values that fit in an 'Int'.
-  | ByteValue !Word8
+  | SqlByte !Word8
     -- ^ Values that fit in one byte.
-  | DayValue !Day
+  | SqlDay !Day
     -- ^ Date (year, month, day) values.
-  | TimeOfDayValue !TimeOfDay
+  | SqlTimeOfDay !TimeOfDay
     -- ^ Time of day (hh, mm, ss + fractional) values.
-  | LocalTimeValue !LocalTime
+  | SqlLocalTime !LocalTime
     -- ^ Local date and time.
+  | SqlNull
   deriving (Eq, Show, Typeable, Ord, Generic, Data)
-instance NFData Value
+instance NFData SqlValue
 
 -- | A simple newtype wrapper around the 'ByteString' type to use when
 -- you want to mean the @binary@ type of SQL, and render to binary
@@ -231,7 +232,7 @@ query ::
      MonadIO m
   => Connection -- ^ A connection to the database.
   -> Text -- ^ SQL query.
-  -> m [[Maybe Value]]
+  -> m [[SqlValue]]
   -- ^ A strict list of rows. This list is not lazy, so if you are
   -- retrieving a large data set, be aware that all of it will be
   -- loaded into memory.
@@ -247,7 +248,7 @@ queryMaps ::
      MonadIO m
   => Connection -- ^ A connection to the database.
   -> Text -- ^ SQL query.
-  -> m [Map Text (Maybe Value)]
+  -> m [Map Text SqlValue]
   -- ^ A strict list of rows. This list is not lazy, so if you are
   -- retrieving a large data set, be aware that all of it will be
   -- loaded into memory.
@@ -263,7 +264,7 @@ stream ::
      (MonadIO m, MonadUnliftIO m)
   => Connection -- ^ A connection to the database.
   -> Text -- ^ SQL query.
-  -> (state -> [Maybe Value] -> m (Step state))
+  -> (state -> [SqlValue] -> m (Step state))
   -- ^ A stepping function that gets as input the current @state@ and
   -- a row, returning either a new @state@ or a final @result@.
   -> state
@@ -333,7 +334,7 @@ withBound = liftIO . flip withAsyncBound wait
 fetchIterator ::
      Ptr EnvAndDbc
   -> UnliftIO m
-  -> (state -> [Maybe Value] -> m (Step state))
+  -> (state -> [SqlValue] -> m (Step state))
   -> state
   -> SQLHSTMT s
   -> IO state
@@ -374,7 +375,7 @@ fetchIterator dbc (UnliftIO runInIO) step state0 stmt = do
     else pure state0
 
 -- | Fetch all rows from a statement.
-fetchStatementRows :: Ptr EnvAndDbc -> SQLHSTMT s -> IO [[Maybe Value]]
+fetchStatementRows :: Ptr EnvAndDbc -> SQLHSTMT s -> IO [[SqlValue]]
 fetchStatementRows dbc stmt = do
   SQLSMALLINT cols <-
     withMalloc
@@ -409,7 +410,7 @@ fetchStatementRows dbc stmt = do
 
 
 -- | Fetch all rows from a statement.
-fetchStatementMaps :: Ptr EnvAndDbc -> SQLHSTMT s -> IO [Map Text (Maybe Value)]
+fetchStatementMaps :: Ptr EnvAndDbc -> SQLHSTMT s -> IO [Map Text SqlValue]
 fetchStatementMaps dbc stmt = do
   SQLSMALLINT cols <-
     withMalloc
@@ -488,7 +489,7 @@ describeColumn dbPtr stmt i =
                                     }))))))))
 
 -- | Pull data for the given column.
-getData :: Ptr EnvAndDbc -> SQLHSTMT s -> SQLUSMALLINT -> Column -> IO (Maybe Value)
+getData :: Ptr EnvAndDbc -> SQLHSTMT s -> SQLUSMALLINT -> Column -> IO SqlValue
 getData dbc stmt i col =
   if | colType == sql_longvarchar -> getBytesData dbc stmt i
      | colType == sql_varchar -> getBytesData dbc stmt i
@@ -502,9 +503,9 @@ getData dbc stmt i col =
          (\bitPtr -> do
             mlen <- getTypedData dbc stmt sql_c_bit i (coerce bitPtr) (SQLLEN 1)
             case mlen of
-              Nothing -> pure Nothing
+              Nothing -> pure SqlNull
               Just {} ->
-                fmap (Just . BoolValue . (/= (0 :: Word8))) (peek bitPtr))
+                fmap (SqlBool . (/= (0 :: Word8))) (peek bitPtr))
      | colType == sql_double ->
        withMalloc
          (\doublePtr -> do
@@ -512,10 +513,10 @@ getData dbc stmt i col =
               getTypedData dbc stmt sql_c_double i (coerce doublePtr) (SQLLEN 8)
             -- float is 8 bytes: https://technet.microsoft.com/en-us/library/ms172424(v=sql.110).aspx
             case mlen of
-              Nothing -> pure Nothing
+              Nothing -> pure SqlNull
               Just {} -> do
-                !d <- fmap DoubleValue (peek doublePtr)
-                pure (Just d))
+                !d <- fmap SqlDouble (peek doublePtr)
+                pure d)
      | colType == sql_float ->
        withMalloc
          (\floatPtr -> do
@@ -524,10 +525,10 @@ getData dbc stmt i col =
             -- SQLFLOAT is covered by SQL_C_DOUBLE: https://docs.microsoft.com/en-us/sql/odbc/reference/appendixes/c-data-types
             -- Float is 8 bytes: https://technet.microsoft.com/en-us/library/ms172424(v=sql.110).aspx
             case mlen of
-              Nothing -> pure Nothing
+              Nothing -> pure SqlNull
               Just {} -> do
-                !d <- fmap DoubleValue (peek floatPtr)
-                pure (Just d))
+                !d <- fmap SqlDouble (peek floatPtr)
+                pure d)
      | colType == sql_decimal ->
        withMalloc
          (\floatPtr -> do
@@ -536,10 +537,10 @@ getData dbc stmt i col =
             -- SQL_NUMERIC can be read as SQLFLOAT
             -- Float is 8 bytes: https://technet.microsoft.com/en-us/library/ms172424(v=sql.110).aspx
             case mlen of
-              Nothing -> pure Nothing
+              Nothing -> pure SqlNull
               Just {} -> do
-                !d <- fmap DoubleValue (peek floatPtr)
-                pure (Just d))
+                !d <- fmap SqlDouble (peek floatPtr)
+                pure d)
      | colType == sql_real ->
        withMalloc
          (\floatPtr -> do
@@ -548,23 +549,23 @@ getData dbc stmt i col =
              -- SQLFLOAT is covered by SQL_C_DOUBLE: https://docs.microsoft.com/en-us/sql/odbc/reference/appendixes/c-data-types
              -- Float is 8 bytes: https://technet.microsoft.com/en-us/library/ms172424(v=sql.110).aspx
             case mlen of
-              Nothing -> pure Nothing
+              Nothing -> pure SqlNull
               Just {} -> do
                 !d <-
                   fmap
-                    (FloatValue . (realToFrac :: Double -> Float))
+                    (SqlFloat . (realToFrac :: Double -> Float))
                     (peek floatPtr)
-                pure (Just d))
+                pure d)
      | colType == sql_integer ->
        withMalloc
          (\intPtr -> do
             mlen <-
               getTypedData dbc stmt sql_c_long i (coerce intPtr) (SQLLEN 4)
             case mlen of
-              Nothing -> pure Nothing
+              Nothing -> pure SqlNull
               Just {} ->
                 fmap
-                  (Just . IntValue . fromIntegral)
+                  (SqlInt . fromIntegral)
                   (peek (intPtr :: Ptr Int32)))
      | colType == sql_bigint ->
        withMalloc
@@ -572,10 +573,10 @@ getData dbc stmt i col =
             mlen <-
               getTypedData dbc stmt sql_c_bigint i (coerce intPtr) (SQLLEN 8)
             case mlen of
-              Nothing -> pure Nothing
+              Nothing -> pure SqlNull
               Just {} ->
                 fmap
-                  (Just . IntValue . fromIntegral)
+                  (SqlInt . fromIntegral)
                   (peek (intPtr :: Ptr Int64)))
      | colType == sql_smallint ->
        withMalloc
@@ -583,10 +584,10 @@ getData dbc stmt i col =
             mlen <-
               getTypedData dbc stmt sql_c_short i (coerce intPtr) (SQLLEN 2)
             case mlen of
-              Nothing -> pure Nothing
+              Nothing -> pure SqlNull
               Just {} ->
                 fmap
-                  (Just . IntValue . fromIntegral)
+                  (SqlInt . fromIntegral)
                   (peek (intPtr :: Ptr Int16)))
      | colType == sql_tinyint ->
        withMalloc
@@ -594,8 +595,8 @@ getData dbc stmt i col =
             mlen <-
               getTypedData dbc stmt sql_c_short i (coerce intPtr) (SQLLEN 1)
             case mlen of
-              Nothing -> pure Nothing
-              Just {} -> fmap (Just . ByteValue) (peek (intPtr :: Ptr Word8)))
+              Nothing -> pure SqlNull
+              Just {} -> fmap SqlByte (peek (intPtr :: Ptr Word8)))
      | colType == sql_type_date ->
        withMallocBytes
          3
@@ -603,10 +604,10 @@ getData dbc stmt i col =
             mlen <-
               getTypedData dbc stmt sql_c_date i (coerce datePtr) (SQLLEN 3)
             case mlen of
-              Nothing -> pure Nothing
+              Nothing -> pure SqlNull
               Just {} ->
                 fmap
-                  (Just . DayValue)
+                  SqlDay
                   (fromGregorian <$>
                    (fmap fromIntegral (odbc_DATE_STRUCT_year datePtr)) <*>
                    (fmap fromIntegral (odbc_DATE_STRUCT_month datePtr)) <*>
@@ -625,10 +626,10 @@ getData dbc stmt i col =
                 (coerce datePtr)
                 (SQLLEN 12)
             case mlen of
-              Nothing -> pure Nothing
+              Nothing -> pure SqlNull
               Just {} ->
                 fmap
-                  (Just . TimeOfDayValue)
+                  SqlTimeOfDay
                   (TimeOfDay <$>
                    (fmap fromIntegral (odbc_TIME_STRUCT_hour datePtr)) <*>
                    (fmap fromIntegral (odbc_TIME_STRUCT_minute datePtr)) <*>
@@ -646,10 +647,10 @@ getData dbc stmt i col =
                 (coerce timestampPtr)
                 (SQLLEN 16)
             case mlen of
-              Nothing -> pure Nothing
+              Nothing -> pure SqlNull
               Just {} ->
                 fmap
-                  (Just . LocalTimeValue)
+                  SqlLocalTime
                   (LocalTime <$>
                    (fromGregorian <$>
                     (fmap fromIntegral (odbc_TIMESTAMP_STRUCT_year timestampPtr)) <*>
@@ -679,11 +680,11 @@ getData dbc stmt i col =
     colType = columnType col
 
 -- | Get the column's data as a vector of CHAR.
-getBytesData :: Ptr EnvAndDbc -> SQLHSTMT s -> SQLUSMALLINT -> IO (Maybe Value)
+getBytesData :: Ptr EnvAndDbc -> SQLHSTMT s -> SQLUSMALLINT -> IO SqlValue
 getBytesData dbc stmt column = do
   mavailableBytes <- getSize dbc stmt sql_c_char column
   case mavailableBytes of
-    Just 0 -> pure (Just (ByteStringValue mempty))
+    Just 0 -> pure (SqlByteString mempty)
     Just availableBytes -> do
       let allocBytes = availableBytes + 1
       bufferp <- callocBytes (fromIntegral allocBytes)
@@ -696,15 +697,15 @@ getBytesData dbc stmt column = do
            (coerce bufferp)
            (SQLLEN (fromIntegral allocBytes)))
       bs <- S.unsafePackMallocCStringLen (bufferp, fromIntegral availableBytes)
-      evaluate (Just (ByteStringValue bs))
-    Nothing -> pure Nothing
+      evaluate (SqlByteString bs)
+    Nothing -> pure SqlNull
 
 -- | Get the column's data as raw binary.
-getBinaryData :: Ptr EnvAndDbc -> SQLHSTMT s -> SQLUSMALLINT -> IO (Maybe Value)
+getBinaryData :: Ptr EnvAndDbc -> SQLHSTMT s -> SQLUSMALLINT -> IO SqlValue
 getBinaryData dbc stmt column = do
   mavailableBinary <- getSize dbc stmt sql_c_binary column
   case mavailableBinary of
-    Just 0 -> pure (Just (BinaryValue (Binary mempty)))
+    Just 0 -> pure (SqlBinary (Binary mempty))
     Just availableBinary -> do
       let allocBinary = availableBinary
       bufferp <- callocBytes (fromIntegral allocBinary)
@@ -717,16 +718,16 @@ getBinaryData dbc stmt column = do
            (coerce bufferp)
            (SQLLEN (fromIntegral allocBinary)))
       bs <- S.unsafePackMallocCStringLen (bufferp, fromIntegral availableBinary)
-      evaluate (Just (BinaryValue (Binary bs)))
-    Nothing -> pure Nothing
+      evaluate (SqlBinary (Binary bs))
+    Nothing -> pure SqlNull
 
 -- | Get the column's data as a text string.
-getTextData :: Ptr EnvAndDbc -> SQLHSTMT s -> SQLUSMALLINT -> IO (Maybe Value)
+getTextData :: Ptr EnvAndDbc -> SQLHSTMT s -> SQLUSMALLINT -> IO SqlValue
 getTextData dbc stmt column = do
   mavailableChars <- getSize dbc stmt sql_c_wchar column
   case mavailableChars of
-    Just 0 -> pure (Just (TextValue mempty))
-    Nothing -> pure Nothing
+    Just 0 -> pure (SqlText mempty)
+    Nothing -> pure SqlNull
     Just availableBytes -> do
       let allocBytes = availableBytes + 2
       withMallocBytes
@@ -741,8 +742,8 @@ getTextData dbc stmt column = do
                 (coerce bufferp)
                 (SQLLEN (fromIntegral allocBytes)))
            t <- T.fromPtr bufferp (fromIntegral (div availableBytes 2))
-           let !v = TextValue t
-           pure (Just v))
+           let !v = SqlText t
+           pure v)
 
 -- | Get some data into the given pointer.
 getTypedData ::

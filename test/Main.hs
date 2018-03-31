@@ -32,7 +32,7 @@ import qualified Data.Text.IO as T
 import           Data.Time
 import           Data.Word
 import           Database.ODBC.Conversion (FromValue(..))
-import           Database.ODBC.Internal (Value (..), Connection, ODBCException(..), Step(..), Binary)
+import           Database.ODBC.Internal (SqlValue (..), Connection, ODBCException(..), Step(..), Binary)
 import qualified Database.ODBC.Internal as Internal
 import           Database.ODBC.SQLServer (ToSql(..))
 import qualified Database.ODBC.SQLServer as SQLServer

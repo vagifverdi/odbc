@@ -24,115 +24,115 @@ import           Database.ODBC.Internal
 
 -- | Convert from a 'Value' to a regular Haskell value.
 class FromValue a where
-  fromValue :: Maybe Value -> Either String a
+  fromValue :: SqlValue -> Either String a
   -- ^ The 'String' is used for a helpful error message.
 
 -- | Expect a value to be non-null.
 withNonNull ::
-     (Value -> Either String a) -> Maybe Value -> Either String a
+     (SqlValue -> Either String a) -> SqlValue -> Either String a
 withNonNull f =
   \case
-    Nothing -> Left "Unexpected NULL for value"
-    Just v -> f v
+    SqlNull -> Left "Unexpected NULL for value"
+    v -> f v
 
 instance FromValue a => FromValue (Maybe a) where
   fromValue =
     \case
-      Nothing -> pure Nothing
-      Just v -> fmap Just (fromValue (Just v))
+      SqlNull -> pure Nothing
+      v -> fmap Just (fromValue v)
 
-instance FromValue Value where
+instance FromValue SqlValue where
   fromValue = withNonNull pure
 
 instance FromValue Text where
   fromValue =
     withNonNull
       (\case
-         TextValue x -> pure (id x)
+         SqlText x -> pure (id x)
          v -> Left ("Expected Text, but got: " ++ show v))
 
 instance FromValue LT.Text where
   fromValue =
     withNonNull
       (\case
-         TextValue x -> pure (LT.fromStrict x)
+         SqlText x -> pure (LT.fromStrict x)
          v -> Left ("Expected Text, but got: " ++ show v))
 
 instance FromValue ByteString where
   fromValue =
     withNonNull
       (\case
-         ByteStringValue x -> pure (id x)
+         SqlByteString x -> pure (id x)
          v -> Left ("Expected ByteString, but got: " ++ show v))
 
 instance FromValue Binary where
   fromValue =
     withNonNull
       (\case
-         BinaryValue x -> pure (id x)
+         SqlBinary x -> pure (id x)
          v -> Left ("Expected Binary, but got: " ++ show v))
 
 instance FromValue L.ByteString where
   fromValue =
     withNonNull
       (\case
-         ByteStringValue x -> pure (L.fromStrict x)
+         SqlByteString x -> pure (L.fromStrict x)
          v -> Left ("Expected ByteString, but got: " ++ show v))
 
 instance FromValue Int where
   fromValue =
     withNonNull
       (\case
-         IntValue x -> pure (id x)
+         SqlInt x -> pure (id x)
          v -> Left ("Expected Int, but got: " ++ show v))
 
 instance FromValue Double where
   fromValue =
     withNonNull
       (\case
-         DoubleValue x -> pure (id x)
+         SqlDouble x -> pure (id x)
          v -> Left ("Expected Double, but got: " ++ show v))
 
 instance FromValue Float where
   fromValue =
     withNonNull
       (\case
-         FloatValue x -> pure (realToFrac x)
+         SqlFloat x -> pure (realToFrac x)
          v -> Left ("Expected Float, but got: " ++ show v))
 
 instance FromValue Word8 where
   fromValue =
     withNonNull
       (\case
-         ByteValue x -> pure x
+         SqlByte x -> pure x
          v -> Left ("Expected Byte, but got: " ++ show v))
 
 instance FromValue Bool where
   fromValue =
     withNonNull
       (\case
-         BoolValue x -> pure (id x)
+         SqlBool x -> pure (id x)
          v -> Left ("Expected Bool, but got: " ++ show v))
 
 instance FromValue Day where
   fromValue =
     withNonNull
       (\case
-         DayValue x -> pure (id x)
+         SqlDay x -> pure (id x)
          v -> Left ("Expected Day, but got: " ++ show v))
 
 instance FromValue TimeOfDay where
   fromValue =
     withNonNull
       (\case
-         TimeOfDayValue x -> pure (id x)
+         SqlTimeOfDay x -> pure (id x)
          v -> Left ("Expected TimeOfDay, but got: " ++ show v))
 
 instance FromValue LocalTime where
   fromValue =
     withNonNull
       (\case
-         LocalTimeValue x -> pure (id x)
+         SqlLocalTime x -> pure (id x)
          v -> Left ("Expected LocalTime, but got: " ++ show v))
 
 --------------------------------------------------------------------------------
@@ -144,7 +144,7 @@ instance FromValue LocalTime where
 -- e.g. @[Maybe Value]@ if you don't know what you're dealing with, or
 -- a tuple e.g. @(Text, Int, Bool)@.
 class FromRow r where
-  fromRow :: [Maybe Value] -> Either String r
+  fromRow :: [SqlValue] -> Either String r
 
 instance FromValue v => FromRow (Maybe v) where
   fromRow [v] = fromValue v
@@ -154,10 +154,10 @@ instance FromValue v => FromRow (Identity v) where
   fromRow [v] = fmap Identity (fromValue v)
   fromRow _ = Left "Unexpected number of fields in row"
 
-instance FromRow [Maybe Value] where
+instance FromRow [SqlValue] where
   fromRow = pure
 
-instance FromRow Value where
+instance FromRow SqlValue where
   fromRow [v] = fromValue v
   fromRow _ = Left "Unexpected number of fields in row"
 

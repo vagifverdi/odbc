@@ -23,7 +23,7 @@ module Database.ODBC.SQLServer
   , exec
   , query
   , queryMaps
-  , Value(..)
+  , SqlValue(..)
   , Query
   , ToSql(..)
   , FromValue(..)
@@ -70,7 +70,7 @@ import qualified Data.Text.Lazy as LT
 import           Data.Time
 import           Data.Word
 import           Database.ODBC.Conversion
-import           Database.ODBC.Internal (Value(..), Connection)
+import           Database.ODBC.Internal (SqlValue(..), Connection)
 import qualified Database.ODBC.Internal as Internal
 import qualified Formatting
 import           Formatting ((%))
@@ -217,7 +217,7 @@ instance IsString Query where
 -- | A part of a query.
 data Part
   = TextPart !Text
-  | ValuePart !Value
+  | ValuePart !SqlValue
   deriving (Eq, Show, Typeable, Ord, Generic, Data)
 
 instance NFData Part
@@ -244,72 +244,72 @@ class ToSql a where
   toSql :: a -> Query
 
 -- | Converts whatever the 'Value' is to SQL.
-instance ToSql Value where
+instance ToSql SqlValue where
   toSql = Query . Seq.fromList . pure . ValuePart
 
 -- | Corresponds to NTEXT (Unicode) of SQL Server. Note that if your
 -- character exceeds the range supported by a wide-char (16-bit), that
 -- cannot be sent to the server.
 instance ToSql Text where
-  toSql = toSql . TextValue
+  toSql = toSql . SqlText
 
 -- | Corresponds to NTEXT (Unicode) of SQL Server. Note that if your
 -- character exceeds the range supported by a wide-char (16-bit), that
 -- cannot be sent to the server.
 instance ToSql LT.Text where
-  toSql = toSql . TextValue . LT.toStrict
+  toSql = toSql . SqlText . LT.toStrict
 
 -- | Corresponds to TEXT (non-Unicode) of SQL Server. For proper
 -- BINARY, see the 'Binary' type.
 instance ToSql ByteString where
-  toSql = toSql . ByteStringValue
+  toSql = toSql . SqlByteString
 
 instance ToSql Internal.Binary where
-  toSql = toSql . BinaryValue
+  toSql = toSql . SqlBinary
 
 -- | Corresponds to TEXT (non-Unicode) of SQL Server. For Unicode, use
 -- the 'Text' type.
 instance ToSql L.ByteString where
-  toSql = toSql . ByteStringValue . L.toStrict
+  toSql = toSql . SqlByteString . L.toStrict
 
 -- | Corresponds to BIT type of SQL Server.
 instance ToSql Bool where
-  toSql = toSql . BoolValue
+  toSql = toSql . SqlBool
 
 -- | Corresponds to FLOAT type of SQL Server.
 instance ToSql Double where
-  toSql = toSql . DoubleValue
+  toSql = toSql . SqlDouble
 
 -- | Corresponds to REAL type of SQL Server.
 instance ToSql Float where
-  toSql = toSql . FloatValue
+  toSql = toSql . SqlFloat
 
 -- | Corresponds to BIGINT type of SQL Server.
 instance ToSql Int where
-  toSql = toSql . IntValue
+  toSql = toSql . SqlInt
 
 -- | Corresponds to SMALLINT type of SQL Server.
 instance ToSql Int16 where
-  toSql = toSql . IntValue . fromIntegral
+  toSql = toSql . SqlInt . fromIntegral
 
 -- | Corresponds to INT type of SQL Server.
 instance ToSql Int32 where
-  toSql = toSql . IntValue . fromIntegral
+  toSql = toSql . SqlInt . fromIntegral
 
 -- | Corresponds to TINYINT type of SQL Server.
 instance ToSql Word8 where
-  toSql = toSql . ByteValue
+  toSql = toSql . SqlByte
 
 -- | Corresponds to DATE type of SQL Server.
 instance ToSql Day where
-  toSql = toSql . DayValue
+  toSql = toSql . SqlDay
 
 -- | Corresponds to TIME type of SQL Server.
 --
 -- 'TimeOfDay' supports more precision than the @time@ type of SQL
 -- server, so you will lose precision and not get back what you inserted.
 instance ToSql TimeOfDay where
-  toSql = toSql . TimeOfDayValue
+  toSql = toSql . SqlTimeOfDay
 
 -- | Corresponds to DATETIME/DATETIME2 type of SQL Server.
 --
@@ -317,7 +317,7 @@ instance ToSql TimeOfDay where
 -- the @datetime2@ types can hold; so you will lose precision when you
 -- insert.
 instance ToSql LocalTime where
-  toSql = toSql . LocalTimeValue
+  toSql = toSql . SqlLocalTime
 
 --------------------------------------------------------------------------------
 -- Top-level functions
@@ -344,7 +344,7 @@ queryMaps ::
      (MonadIO m)
   => Connection -- ^ A connection to the database.
   -> Query -- ^ SQL query.
-  -> m [Map Text (Maybe Value)]
+  -> m [Map Text SqlValue]
 queryMaps c (Query ps) = Internal.queryMaps c (renderParts (toList ps))
 
 
@@ -399,27 +399,27 @@ renderPart =
     ValuePart v -> renderValue v
 
 -- | Render a value to a query.
-renderValue :: Value -> Text
+renderValue :: SqlValue -> Text
 renderValue =
   \case
-    TextValue t -> "(N'" <> T.concatMap escapeChar t <> "')"
-    BinaryValue (Internal.Binary bytes) ->
+    SqlText t -> "(N'" <> T.concatMap escapeChar t <> "')"
+    SqlBinary (Internal.Binary bytes) ->
       "0x" <>
       T.concat
         (map
            (Formatting.sformat
               (Formatting.left 2 '0' Formatting.%. Formatting.hex))
            (S.unpack bytes))
-    ByteStringValue xs ->
+    SqlByteString xs ->
       "('" <> T.concat (map escapeChar8 (S.unpack xs)) <> "')"
-    BoolValue True -> "1"
-    BoolValue False -> "0"
-    ByteValue n -> Formatting.sformat Formatting.int n
-    DoubleValue d -> Formatting.sformat Formatting.float d
-    FloatValue d -> Formatting.sformat Formatting.float (realToFrac d :: Double)
-    IntValue d -> Formatting.sformat Formatting.int d
-    DayValue d -> Formatting.sformat ("'" % Formatting.dateDash % "'") d
-    TimeOfDayValue (TimeOfDay hh mm ss) ->
+    SqlBool True -> "1"
+    SqlBool False -> "0"
+    SqlByte n -> Formatting.sformat Formatting.int n
+    SqlDouble d -> Formatting.sformat Formatting.float d
+    SqlFloat d -> Formatting.sformat Formatting.float (realToFrac d :: Double)
+    SqlInt d -> Formatting.sformat Formatting.int d
+    SqlDay d -> Formatting.sformat ("'" % Formatting.dateDash % "'") d
+    SqlTimeOfDay (TimeOfDay hh mm ss) ->
       Formatting.sformat
         ("'" % Formatting.left 2 '0' % ":" % Formatting.left 2 '0' % ":" %
          Formatting.string %
@@ -427,7 +427,7 @@ renderValue =
         hh
         mm
         (renderFractional ss)
-    LocalTimeValue (LocalTime d (TimeOfDay hh mm ss)) ->
+    SqlLocalTime (LocalTime d (TimeOfDay hh mm ss)) ->
       Formatting.sformat
         ("'" % Formatting.dateDash % " " % Formatting.left 2 '0' % ":" %
          Formatting.left 2 '0' %
@@ -438,6 +438,7 @@ renderValue =
         hh
         mm
         (renderFractional ss)
+    SqlNull -> "null"
 
 -- | Obviously, this is not fast. But it is correct. A faster version
 -- can be written later.

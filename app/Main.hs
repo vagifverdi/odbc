@@ -45,19 +45,20 @@ repl c = do
       putStr "> "
       catch (fmap Just T.getLine) (\(_ :: IOException) -> pure Nothing)
     output count row = do
-      putStrLn (intercalate ", " (map (maybe "NULL" showColumn) row))
+      putStrLn (intercalate ", " (map showColumn row))
       pure (ODBC.Continue (count + 1))
       where
         showColumn =
           \case
-            ODBC.TextValue t -> show t
-            ODBC.ByteStringValue bs -> show bs
-            ODBC.BinaryValue bs -> show bs
-            ODBC.BoolValue b -> show b
-            ODBC.DoubleValue d -> printf "%f" d
-            ODBC.FloatValue d -> printf "%f" d
-            ODBC.IntValue i -> show i
-            ODBC.DayValue d -> show d
-            ODBC.ByteValue b -> show b
-            ODBC.TimeOfDayValue v -> show v
-            ODBC.LocalTimeValue v -> show v
+            ODBC.SqlText t -> show t
+            ODBC.SqlByteString bs -> show bs
+            ODBC.SqlBinary bs -> show bs
+            ODBC.SqlBool b -> show b
+            ODBC.SqlDouble d -> printf "%f" d
+            ODBC.SqlFloat d -> printf "%f" d
+            ODBC.SqlInt i -> show i
+            ODBC.SqlDay d -> show d
+            ODBC.SqlByte b -> show b
+            ODBC.SqlTimeOfDay v -> show v
+            ODBC.SqlLocalTime v -> show v
+            ODBC.SqlNull -> "NULL"
