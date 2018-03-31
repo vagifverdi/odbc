@@ -28,6 +28,7 @@ module Database.ODBC.Internal
     -- * Executing queries
   , exec
   , query
+  , queryMaps
   , Value(..)
   , Binary(..)
     -- * Streaming results
@@ -49,6 +50,8 @@ import qualified Data.ByteString.Unsafe as S
 import           Data.Coerce
 import           Data.Data
 import           Data.Int
+import           Data.Map (Map)
+import qualified Data.Map as Map
 import           Data.String
 import           Data.Text (Text)
 import qualified Data.Text as T
@@ -150,6 +153,7 @@ data Column = Column
   , columnSize :: !SQLULEN
   , columnDigits :: !SQLSMALLINT
   , columnNull :: !SQLSMALLINT
+  , columnName :: !Text
   } deriving (Show)
 
 --------------------------------------------------------------------------------
@@ -237,6 +241,22 @@ query conn string =
        conn
        "query"
        (\dbc -> withExecDirect dbc string (fetchStatementRows dbc)))
+
+-- | Query and return a list of rows.
+queryMaps ::
+     MonadIO m
+  => Connection -- ^ A connection to the database.
+  -> Text -- ^ SQL query.
+  -> m [Map Text (Maybe Value)]
+  -- ^ A strict list of rows. This list is not lazy, so if you are
+  -- retrieving a large data set, be aware that all of it will be
+  -- loaded into memory.
+queryMaps conn string =
+  withBound
+    (withHDBC
+       conn
+       "query"
+       (\dbc -> withExecDirect dbc string (fetchStatementMaps dbc)))
 
 -- | Stream results like a fold with the option to stop at any time.
 stream ::
@@ -387,6 +407,42 @@ fetchStatementRows dbc stmt = do
     then loop id
     else pure []
 
+
+-- | Fetch all rows from a statement.
+fetchStatementMaps :: Ptr EnvAndDbc -> SQLHSTMT s -> IO [Map Text (Maybe Value)]
+fetchStatementMaps dbc stmt = do
+  SQLSMALLINT cols <-
+    withMalloc
+      (\sizep -> do
+         assertSuccess
+           dbc
+           "odbc_SQLNumResultCols"
+           (odbc_SQLNumResultCols stmt sizep)
+         peek sizep)
+  types <- mapM (describeColumn dbc stmt) [1 .. cols]
+  let loop rows = do
+        do retcode0 <- odbc_SQLFetch dbc stmt
+           if | retcode0 == sql_no_data ->
+                do retcode <- odbc_SQLMoreResults dbc stmt
+                   if retcode == sql_success || retcode == sql_success_with_info
+                     then loop rows
+                     else pure (rows [])
+              | retcode0 == sql_success || retcode0 == sql_success_with_info ->
+                do fields <-
+                     foldM (\a (i,col) -> do v <- getData dbc stmt i col
+                                             return $ Map.insert (columnName col) v a) Map.empty (zip [SQLUSMALLINT 1 ..] types)
+                   loop (rows . (fields :))
+              | otherwise ->
+                throwIO
+                  (UnsuccessfulReturnCode
+                     "odbc_SQLFetch"
+                     (coerce retcode0)
+                     "Unexpected return code")
+  if cols > 0
+    then loop id
+    else pure []
+
+
 -- | Describe the given column by its integer index.
 describeColumn :: Ptr EnvAndDbc -> SQLHSTMT s -> Int16 -> IO Column
 describeColumn dbPtr stmt i =
@@ -420,12 +476,15 @@ describeColumn dbPtr stmt i =
                                   size <- peek sizep
                                   digits <- peek digitsp
                                   isnull <- peek nullp
+                                  colnamelen  <- peek namelenp
+                                  colname <- T.fromPtr namep (fromIntegral colnamelen)
                                   evaluate
                                     Column
                                     { columnType = typ
                                     , columnSize = size
                                     , columnDigits = digits
                                     , columnNull = isnull
+                                    , columnName = colname
                                     }))))))))
 
 -- | Pull data for the given column.

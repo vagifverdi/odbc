@@ -22,6 +22,7 @@ module Database.ODBC.SQLServer
     -- * Executing queries
   , exec
   , query
+  , queryMaps
   , Value(..)
   , Query
   , ToSql(..)
@@ -57,6 +58,7 @@ import           Data.Data
 import           Data.Fixed
 import           Data.Foldable
 import           Data.Int
+import           Data.Map (Map)
 import           Data.Monoid (Monoid, (<>))
 import           Data.Semigroup (Semigroup)
 import           Data.Sequence (Seq)
@@ -336,6 +338,15 @@ query c (Query ps) = do
   case mapM fromRow rows of
     Right rows' -> pure rows'
     Left e -> liftIO (throwIO (Internal.DataRetrievalError e))
+
+
+queryMaps ::
+     (MonadIO m)
+  => Connection -- ^ A connection to the database.
+  -> Query -- ^ SQL query.
+  -> m [Map Text (Maybe Value)]
+queryMaps c (Query ps) = Internal.queryMaps c (renderParts (toList ps))
+
 
 -- | Render a query to a plain text string. Useful for debugging and
 -- testing.
