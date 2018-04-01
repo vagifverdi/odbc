@@ -233,12 +233,10 @@ exec conn string =
 fetchAllResults :: Ptr EnvAndDbc -> SQLHSTMT s -> IO ()
 fetchAllResults dbc stmt = do
    retcode <- odbc_SQLMoreResults dbc stmt
-   if | retcode == sql_success -> putStrLn "success" >> fetchAllResults dbc stmt
-      | retcode == sql_success_with_info -> putStrLn "successwithinfo" >> fetchAllResults dbc stmt
+   if | retcode == sql_success -> fetchAllResults dbc stmt
+      | retcode == sql_success_with_info -> fetchAllResults dbc stmt
       | retcode == sql_no_data -> pure ()
-      | otherwise -> do putStrLn "different code"
-                        print retcode
-                        ptr <- odbc_error dbc
+      | otherwise -> do ptr <- odbc_error dbc
                         string <-
                           if nullPtr == ptr
                             then pure ""
