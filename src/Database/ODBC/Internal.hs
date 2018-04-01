@@ -225,7 +225,25 @@ exec conn string =
     (withHDBC
        conn
        "exec"
-       (\dbc -> withExecDirect dbc string (const (pure ()))))
+       (\dbc -> withExecDirect dbc string (fetchAllResults dbc)))
+
+
+
+-- | Fetch all results from possible multiple statements.
+fetchAllResults :: Ptr EnvAndDbc -> SQLHSTMT s -> IO ()
+fetchAllResults dbc stmt = do
+   retcode <- odbc_SQLMoreResults dbc stmt
+   if | retcode == sql_success -> putStrLn "success" >> fetchAllResults dbc stmt
+      | retcode == sql_success_with_info -> putStrLn "successwithinfo" >> fetchAllResults dbc stmt
+      | retcode == sql_no_data -> pure ()
+      | otherwise -> do putStrLn "different code"
+                        print retcode
+                        ptr <- odbc_error dbc
+                        string <-
+                          if nullPtr == ptr
+                            then pure ""
+                            else peekCString ptr
+                        throwIO (UnsuccessfulReturnCode "exec" (coerce retcode) string)
 
 -- | Query and return a list of rows.
 query ::
