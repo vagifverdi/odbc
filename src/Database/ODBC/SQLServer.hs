@@ -5,6 +5,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 
+
 -- | SQL Server database API.
 
 module Database.ODBC.SQLServer
@@ -20,12 +21,10 @@ module Database.ODBC.SQLServer
   , Internal.Connection
 
     -- * Executing queries
-  , exec
+  , Internal.queryMaps
+  , Internal.exec
   , query
-  , queryMaps
   , SqlValue(..)
-  , Query
-  , ToSql(..)
   , FromValue(..)
   , FromRow(..)
   , Internal.Binary(..)
@@ -41,42 +40,21 @@ module Database.ODBC.SQLServer
 
   , Internal.ODBCException(..)
 
-   -- * Debugging
-  , renderQuery
   ) where
 
 
-import           Control.DeepSeq
 import           Control.Exception
 import           Control.Monad.IO.Class
 import           Control.Monad.IO.Unlift
-import           Data.ByteString (ByteString)
-import qualified Data.ByteString as S
-import qualified Data.ByteString.Lazy as L
 import           Data.Char
-import           Data.Data
-import           Data.Fixed
-import           Data.Foldable
-import           Data.Int
-import           Data.Map (Map)
-import           Data.Monoid (Monoid, (<>))
-import           Data.Semigroup (Semigroup)
-import           Data.Sequence (Seq)
-import qualified Data.Sequence as Seq
-import           Data.String
+import           Data.Monoid ((<>))
 import           Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as LT
-import           Data.Time
 import           Data.Word
 import           Database.ODBC.Conversion
 import           Database.ODBC.Internal (SqlValue(..), Connection)
 import qualified Database.ODBC.Internal as Internal
 import qualified Formatting
-import           Formatting ((%))
-import           Formatting.Time as Formatting
-import           GHC.Generics
-import           Text.Printf
 
 -- $building
 --
@@ -195,130 +173,6 @@ import           Text.Printf
 --------------------------------------------------------------------------------
 -- Types
 
--- | A query builder.  Use 'toSql' to convert Haskell values to this
--- type safely.
---
--- It's an instance of 'IsString', so you can use @OverloadedStrings@
--- to produce plain text values e.g. @"SELECT 123"@.
---
--- It's an instance of 'Monoid', so you can append fragments together
--- with '<>' e.g. @"SELECT * FROM x WHERE id = " <> toSql 123@.
---
--- This is meant as a bare-minimum of safety and convenience.
-newtype Query =
-  Query (Seq Part)
-  deriving (Monoid, Eq, Show, Typeable, Ord, Generic, Data, Semigroup)
-
-instance NFData Query
-
-instance IsString Query where
-  fromString = Query . Seq.fromList . pure . fromString
-
--- | A part of a query.
-data Part
-  = TextPart !Text
-  | ValuePart !SqlValue
-  deriving (Eq, Show, Typeable, Ord, Generic, Data)
-
-instance NFData Part
-
-instance IsString Part where
-  fromString = TextPart . T.pack
-
---------------------------------------------------------------------------------
--- Conversion to SQL
-
--- | Handy class for converting values to a query safely.
---
--- For example: @query c (\"SELECT * FROM demo WHERE id > \" <> toSql 123)@
---
--- WARNING: Note that if you insert a value like an 'Int' (64-bit)
--- into a column that is @int@ (32-bit), then be sure that your number
--- fits inside an @int@. Try using an 'Int32' instead to be
--- sure.
-
--- Below next to each instance you can read which Haskell types
--- corresponds to which SQL Server type.
---
-class ToSql a where
-  toSql :: a -> Query
-
--- | Converts whatever the 'Value' is to SQL.
-instance ToSql SqlValue where
-  toSql = Query . Seq.fromList . pure . ValuePart
-
--- | Corresponds to NTEXT (Unicode) of SQL Server. Note that if your
--- character exceeds the range supported by a wide-char (16-bit), that
--- cannot be sent to the server.
-instance ToSql Text where
-  toSql = toSql . SqlText
-
--- | Corresponds to NTEXT (Unicode) of SQL Server. Note that if your
--- character exceeds the range supported by a wide-char (16-bit), that
--- cannot be sent to the server.
-instance ToSql LT.Text where
-  toSql = toSql . SqlText . LT.toStrict
-
--- | Corresponds to TEXT (non-Unicode) of SQL Server. For proper
--- BINARY, see the 'Binary' type.
-instance ToSql ByteString where
-  toSql = toSql . SqlByteString
-
-instance ToSql Internal.Binary where
-  toSql = toSql . SqlBinary
-
--- | Corresponds to TEXT (non-Unicode) of SQL Server. For Unicode, use
--- the 'Text' type.
-instance ToSql L.ByteString where
-  toSql = toSql . SqlByteString . L.toStrict
-
--- | Corresponds to BIT type of SQL Server.
-instance ToSql Bool where
-  toSql = toSql . SqlBool
-
--- | Corresponds to FLOAT type of SQL Server.
-instance ToSql Double where
-  toSql = toSql . SqlDouble
-
--- | Corresponds to REAL type of SQL Server.
-instance ToSql Float where
-  toSql = toSql . SqlFloat
-
--- | Corresponds to BIGINT type of SQL Server.
-instance ToSql Int where
-  toSql = toSql . SqlInt
-
--- | Corresponds to SMALLINT type of SQL Server.
-instance ToSql Int16 where
-  toSql = toSql . SqlInt . fromIntegral
-
--- | Corresponds to INT type of SQL Server.
-instance ToSql Int32 where
-  toSql = toSql . SqlInt . fromIntegral
-
--- | Corresponds to TINYINT type of SQL Server.
-instance ToSql Word8 where
-  toSql = toSql . SqlByte
-
--- | Corresponds to DATE type of SQL Server.
-instance ToSql Day where
-  toSql = toSql . SqlDay
-
--- | Corresponds to TIME type of SQL Server.
---
--- 'TimeOfDay' supports more precision than the @time@ type of SQL
--- server, so you will lose precision and not get back what you inserted.
-instance ToSql TimeOfDay where
-  toSql = toSql . SqlTimeOfDay
-
--- | Corresponds to DATETIME/DATETIME2 type of SQL Server.
---
--- The 'LocalTime' type has more accuracy than the @datetime@ type and
--- the @datetime2@ types can hold; so you will lose precision when you
--- insert.
-instance ToSql LocalTime where
-  toSql = toSql . SqlLocalTime
-
 --------------------------------------------------------------------------------
 -- Top-level functions
 
@@ -331,33 +185,21 @@ instance ToSql LocalTime where
 query ::
      (MonadIO m, FromRow row)
   => Connection -- ^ A connection to the database.
-  -> Query -- ^ SQL query.
+  -> Text -- ^ SQL query.
   -> m [row]
-query c (Query ps) = do
-  rows <- Internal.query c (renderParts (toList ps))
+query c txt = do
+  rows <- Internal.query c txt
   case mapM fromRow rows of
     Right rows' -> pure rows'
     Left e -> liftIO (throwIO (Internal.DataRetrievalError e))
 
 
-queryMaps ::
-     (MonadIO m)
-  => Connection -- ^ A connection to the database.
-  -> Query -- ^ SQL query.
-  -> m [Map Text SqlValue]
-queryMaps c (Query ps) = Internal.queryMaps c (renderParts (toList ps))
-
-
--- | Render a query to a plain text string. Useful for debugging and
--- testing.
-renderQuery :: Query -> Text
-renderQuery (Query ps) = (renderParts (toList ps))
 
 -- | Stream results like a fold with the option to stop at any time.
 stream ::
      (MonadUnliftIO m, FromRow row)
   => Connection -- ^ A connection to the database.
-  -> Query -- ^ SQL query.
+  -> Text -- ^ SQL query.
   -> (state -> row -> m (Internal.Step state))
   -- ^ A stepping function that gets as input the current @state@ and
   -- a row, returning either a new @state@ or a final @result@.
@@ -366,89 +208,16 @@ stream ::
   -- evaluated each iteration.
   -> m state
   -- ^ Final result, produced by the stepper function.
-stream c (Query ps) cont nil =
+stream c txt cont nil =
   Internal.stream
     c
-    (renderParts (toList ps))
+    txt
     (\state row ->
        case fromRow row of
          Left e -> liftIO (throwIO (Internal.DataRetrievalError e))
          Right row' -> cont state row')
     nil
 
--- | Execute a statement on the database.
-exec ::
-     MonadIO m
-  => Connection -- ^ A connection to the database.
-  -> Query -- ^ SQL statement.
-  -> m ()
-exec c (Query ps) = Internal.exec c (renderParts (toList ps))
-
---------------------------------------------------------------------------------
--- Query building
-
--- | Convert a list of parts into a query.
-renderParts :: [Part] -> Text
-renderParts = T.concat . map renderPart
-
--- | Render a query part to a query.
-renderPart :: Part -> Text
-renderPart =
-  \case
-    TextPart t -> t
-    ValuePart v -> renderValue v
-
--- | Render a value to a query.
-renderValue :: SqlValue -> Text
-renderValue =
-  \case
-    SqlText t -> "(N'" <> T.concatMap escapeChar t <> "')"
-    SqlBinary (Internal.Binary bytes) ->
-      "0x" <>
-      T.concat
-        (map
-           (Formatting.sformat
-              (Formatting.left 2 '0' Formatting.%. Formatting.hex))
-           (S.unpack bytes))
-    SqlByteString xs ->
-      "('" <> T.concat (map escapeChar8 (S.unpack xs)) <> "')"
-    SqlBool True -> "1"
-    SqlBool False -> "0"
-    SqlByte n -> Formatting.sformat Formatting.int n
-    SqlDouble d -> Formatting.sformat Formatting.float d
-    SqlFloat d -> Formatting.sformat Formatting.float (realToFrac d :: Double)
-    SqlInt d -> Formatting.sformat Formatting.int d
-    SqlDay d -> Formatting.sformat ("'" % Formatting.dateDash % "'") d
-    SqlTimeOfDay (TimeOfDay hh mm ss) ->
-      Formatting.sformat
-        ("'" % Formatting.left 2 '0' % ":" % Formatting.left 2 '0' % ":" %
-         Formatting.string %
-         "'")
-        hh
-        mm
-        (renderFractional ss)
-    SqlLocalTime (LocalTime d (TimeOfDay hh mm ss)) ->
-      Formatting.sformat
-        ("'" % Formatting.dateDash % " " % Formatting.left 2 '0' % ":" %
-         Formatting.left 2 '0' %
-         ":" %
-         Formatting.string %
-         "'")
-        d
-        hh
-        mm
-        (renderFractional ss)
-    SqlNull -> "null"
-
--- | Obviously, this is not fast. But it is correct. A faster version
--- can be written later.
-renderFractional :: Pico -> String
-renderFractional x = trim (printf "%.7f" (realToFrac x :: Double) :: String)
-  where
-    trim s =
-      reverse (case dropWhile (== '0') (reverse s) of
-                 s'@('.':_) -> '0' : s'
-                 s' -> s')
 
 -- | A very conservative character escape.
 escapeChar8 :: Word8 -> Text
